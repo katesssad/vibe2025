@@ -5,9 +5,11 @@ const mysql = require('mysql2/promise');
 const url = require('url');
 const querystring = require('querystring');
 const crypto = require('crypto');
+const TelegramBot = require('node-telegram-bot-api');
 
 const PORT = 3000;
 const SESSION_SECRET = 'your-secret-key-here';
+const TELEGRAM_TOKEN = '7604186300:AAFUeCVzHg6PXudGUToFN_Tl-WHzbfAeLaI'; 
 
 const dbConfig = {
     host: 'localhost',
@@ -16,7 +18,13 @@ const dbConfig = {
     database: 'todolist',
 };
 
+// Инициализация Telegram бота
+const bot = new TelegramBot(TELEGRAM_TOKEN, {polling: true});
+
+// Сессии в памяти
 const sessions = {};
+// Сессии Telegram пользователей
+const telegramSessions = {};
 
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
@@ -171,7 +179,6 @@ async function serveLoginPage(res, isRegister = false) {
             </script>
         `;
         
-        // Полностью заменяем содержимое body на форму авторизации
         html = html.replace(/<body>[\s\S]*<\/body>/, `<body>${authForm}</body>`);
         
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -214,6 +221,140 @@ async function serveTodoList(res, userId, username) {
         res.end('Error loading page');
     }
 }
+
+// Функция для форматирования списка задач
+function formatTasks(tasks) {
+    if (tasks.length === 0) {
+        return "У вас пока нет задач.";
+    }
+    
+    return tasks.map(task => `${task.id}. ${task.text}`).join('\n');
+}
+
+// Обработчики команд Telegram бота
+bot.onText(/\/начать/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, 'Привет! Я бот для управления вашим To-Do списком. Используйте команды:\n' +
+        '/задачи - показать все задачи\n' +
+        '/добавить [текст] - добавить задачу\n' +
+        '/изменить [номер] [новый текст] - изменить задачу\n' +
+        '/удалить [номер] - удалить задачу\n' +
+        '/вход [username] [password] - авторизация\n' +
+        '/выход - выход из системы');
+});
+
+bot.onText(/\/задачи/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (!telegramSessions[chatId] || !telegramSessions[chatId].userId) {
+        bot.sendMessage(chatId, 'Сначала вам нужно авторизоваться. Пожалуйста, введите /вход [ваш_username] [ваш_пароль]');
+        return;
+    }
+    
+    try {
+        const tasks = await retrieveListItems(telegramSessions[chatId].userId);
+        bot.sendMessage(chatId, formatTasks(tasks) || "У вас пока нет задач.");
+    } catch (error) {
+        console.error('Error retrieving tasks:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при получении списка задач.');
+    }
+});
+
+bot.onText(/\/добавить (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const text = match[1];
+    
+    if (!telegramSessions[chatId] || !telegramSessions[chatId].userId) {
+        bot.sendMessage(chatId, 'Сначала вам нужно авторизоваться. Пожалуйста, введите /вход [ваш_username] [ваш_пароль]');
+        return;
+    }
+    
+    try {
+        await addListItem(text, telegramSessions[chatId].userId);
+        bot.sendMessage(chatId, `Задача "${text}" успешно добавлена!`);
+    } catch (error) {
+        console.error('Error adding task:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при добавлении задачи.');
+    }
+});
+
+bot.onText(/\/изменить (\d+) (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const taskId = match[1];
+    const newText = match[2];
+    
+    if (!telegramSessions[chatId] || !telegramSessions[chatId].userId) {
+        bot.sendMessage(chatId, 'Сначала вам нужно авторизоваться. Пожалуйста, введите /вход [ваш_username] [ваш_пароль]');
+        return;
+    }
+    
+    try {
+        const updated = await updateListItem(taskId, newText, telegramSessions[chatId].userId);
+        if (updated) {
+            bot.sendMessage(chatId, `Задача ${taskId} успешно обновлена!`);
+        } else {
+            bot.sendMessage(chatId, `Задача с ID ${taskId} не найдена.`);
+        }
+    } catch (error) {
+        console.error('Error updating task:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при обновлении задачи.');
+    }
+});
+
+bot.onText(/\/удалить (\d+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const taskId = match[1];
+    
+    if (!telegramSessions[chatId] || !telegramSessions[chatId].userId) {
+        bot.sendMessage(chatId, 'Сначала вам нужно авторизоваться. Пожалуйста, введите /вход [ваш_username] [ваш_пароль]');
+        return;
+    }
+    
+    try {
+        const deleted = await deleteListItem(taskId, telegramSessions[chatId].userId);
+        if (deleted) {
+            bot.sendMessage(chatId, `Задача ${taskId} успешно удалена!`);
+        } else {
+            bot.sendMessage(chatId, `Задача с ID ${taskId} не найдена.`);
+        }
+    } catch (error) {
+        console.error('Error deleting task:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при удалении задачи.');
+    }
+});
+
+bot.onText(/\/вход (.+) (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const username = match[1];
+    const password = match[2];
+    
+    try {
+        const user = await getUserByCredentials(username, password);
+        if (user) {
+            telegramSessions[chatId] = {
+                userId: user.id,
+                username: user.username
+            };
+            bot.sendMessage(chatId, `Вы успешно авторизованы как ${user.username}! Теперь вы можете управлять своими задачами.`);
+        } else {
+            bot.sendMessage(chatId, 'Неверные учетные данные. Пожалуйста, проверьте имя пользователя и пароль.');
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        bot.sendMessage(chatId, 'Произошла ошибка при авторизации.');
+    }
+});
+
+bot.onText(/\/выход/, (msg) => {
+    const chatId = msg.chat.id;
+    delete telegramSessions[chatId];
+    bot.sendMessage(chatId, 'Вы успешно вышли из системы.');
+});
+
+// Обработка ошибок бота
+bot.on('polling_error', (error) => {
+    console.error('Polling error:', error);
+});
 
 async function handleRequest(req, res) {
     const parsedUrl = url.parse(req.url, true);
