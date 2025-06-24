@@ -7,99 +7,66 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        h2 {
-            text-align: center;
-            color: #333;
         }
         #todoList {
-            width: 100%;
             border-collapse: collapse;
-            margin: 20px 0;
+            width: 70%;
+            margin: 0 auto;
         }
         #todoList th, #todoList td {
             border: 1px solid #ddd;
-            padding: 12px;
+            padding: 8px;
             text-align: left;
         }
         #todoList th {
             background-color: #f0f0f0;
-            font-weight: bold;
         }
-        #todoList tr:hover {
-            background-color: #f9f9f9;
+        #todoList th:first-child, #todoList th:last-child {
+            width: 5%;
         }
-        .delete-btn {
-            background-color: #ff4444;
-            color: white;
-            border: none;
-            padding: 6px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background-color 0.3s;
-        }
-        .delete-btn:hover {
-            background-color: #cc0000;
+        #todoList th:nth-child(2) {
+            width: 90%;
         }
         .add-form {
-            display: flex;
-            gap: 10px;
             margin-top: 20px;
+            width: 70%;
+            margin: 20px auto;
         }
-        #newItem {
-            flex-grow: 1;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 16px;
+        .add-form input[type="text"] {
+            padding: 8px;
+            width: 70%;
         }
-        .add-btn {
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background-color 0.3s;
+        .add-form button {
+            padding: 8px;
+            width: 20%;
         }
-        .add-btn:hover {
-            background-color: #45a049;
+        .edit-input {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <h2>To-Do List</h2>
 
-    <table id="todoList">
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Task</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody id="listBody">
-            {{rows}}
-        </tbody>
-    </table>
+<h2 style="text-align: center;">To-Do List</h2>
 
-    <div class="add-form">
-        <input type="text" id="newItem" placeholder="Enter new task">
-        <button class="add-btn" onclick="addItem()">Add Task</button>
-    </div>
+<table id="todoList">
+    <thead>
+        <tr>
+            <th>Number</th>
+            <th>Text</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody id="listBody">
+        {{rows}}
+    </tbody>
+</table>
+
+<div class="add-form">
+    <input type="text" id="newItem" placeholder="Enter new item">
+    <button onclick="addItem()">Add</button>
 </div>
 
 <script>
@@ -147,6 +114,49 @@
             }
         }
     }
+
+    function enableEdit(id, currentText) {
+        const row = document.querySelector(`tr[data-id="${id}"]`);
+        const textCell = row.querySelector('.item-text');
+        
+        textCell.innerHTML = `
+            <input type="text" class="edit-input" value="${currentText}">
+            <button onclick="saveEdit(${id})">Save</button>
+            <button onclick="cancelEdit(${id}, '${currentText}')">Cancel</button>
+        `;
+    }
+
+    async function saveEdit(id) {
+        const newText = document.querySelector(`tr[data-id="${id}"] .edit-input`).value.trim();
+        
+        if (newText) {
+            try {
+                const response = await fetch(`/items/${id}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ text: newText })
+                });
+
+                if (response.ok) {
+                    window.location.reload();
+                } else {
+                    alert('Failed to update item');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error updating item');
+            }
+        }
+    }
+
+    function cancelEdit(id, originalText) {
+        const row = document.querySelector(`tr[data-id="${id}"]`);
+        const textCell = row.querySelector('.item-text');
+        textCell.innerHTML = originalText;
+    }
 </script>
+
 </body>
 </html>

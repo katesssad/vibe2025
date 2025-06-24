@@ -5,7 +5,7 @@ const mysql = require('mysql2/promise');
 
 const PORT = 3000;
 
-// Database configuration
+// Database connection settings
 const dbConfig = {
     host: 'localhost',
     user: 'root',
@@ -13,106 +13,132 @@ const dbConfig = {
     database: 'todolist',
 };
 
-// Database functions
-async function getItems() {
-    const connection = await mysql.createConnection(dbConfig);
-    const [rows] = await connection.execute('SELECT id, text FROM items');
-    await connection.end();
-    return rows;
+async function retrieveListItems() {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'SELECT id, text FROM items';
+        const [rows] = await connection.execute(query);
+        await connection.end();
+        return rows;
+    } catch (error) {
+        console.error('Error retrieving list items:', error);
+        throw error;
+    }
 }
 
-async function addItem(text) {
-    const connection = await mysql.createConnection(dbConfig);
-    const [result] = await connection.execute(
-        'INSERT INTO items (text) VALUES (?)',
-        [text]
-    );
-    await connection.end();
-    return result.insertId;
+async function addListItem(text) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'INSERT INTO items (text) VALUES (?)';
+        const [result] = await connection.execute(query, [text]);
+        await connection.end();
+        return result.insertId;
+    } catch (error) {
+        console.error('Error adding list item:', error);
+        throw error;
+    }
 }
 
-async function deleteItem(id) {
-    const connection = await mysql.createConnection(dbConfig);
-    await connection.execute(
-        'DELETE FROM items WHERE id = ?',
-        [id]
-    );
-    await connection.end();
+async function updateListItem(id, text) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'UPDATE items SET text = ? WHERE id = ?';
+        await connection.execute(query, [text, id]);
+        await connection.end();
+    } catch (error) {
+        console.error('Error updating list item:', error);
+        throw error;
+    }
 }
 
-// HTML generation
-async function generateHtmlRows() {
-    const items = await getItems();
-    return items.map(item => `
-        <tr>
+async function removeListItem(id) {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const query = 'DELETE FROM items WHERE id = ?';
+        await connection.execute(query, [id]);
+        await connection.end();
+    } catch (error) {
+        console.error('Error removing list item:', error);
+        throw error;
+    }
+}
+
+async function getHtmlRows() {
+    const todoItems = await retrieveListItems();
+    return todoItems.map(item => `
+        <tr data-id="${item.id}">
             <td>${item.id}</td>
-            <td>${item.text}</td>
+            <td class="item-text">${item.text}</td>
             <td>
-                <button class="delete-btn" onclick="deleteItem(${item.id})">
-                    Delete
-                </button>
+                <button onclick="enableEdit(${item.id}, '${item.text.replace(/'/g, "\\'")}')">Edit</button>
+                <button onclick="deleteItem(${item.id})">×</button>
             </td>
         </tr>
     `).join('');
 }
 
-// Request handler
 async function handleRequest(req, res) {
-    // Serve HTML with items list
     if (req.url === '/' && req.method === 'GET') {
         try {
-            let html = await fs.promises.readFile(
-                path.join(__dirname, 'index.html'),
+            const html = await fs.promises.readFile(
+                path.join(__dirname, 'index.html'), 
                 'utf8'
             );
-            html = html.replace('{{rows}}', await generateHtmlRows());
+            const processedHtml = html.replace('{{rows}}', await getHtmlRows());
             res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(html);
+            res.end(processedHtml);
         } catch (err) {
             console.error(err);
             res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal Server Error');
+            res.end('Error loading index.html');
         }
-    }
-    // Add new item
-    else if (req.url === '/items' && req.method === 'POST') {
+    } else if (req.url === '/items' && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => body += chunk.toString());
         req.on('end', async () => {
             try {
                 const { text } = JSON.parse(body);
-                await addItem(text);
+                await addListItem(text);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
                 console.error(error);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: error.message }));
+                res.end(JSON.stringify({ success: false, error: 'Failed to add item' }));
             }
         });
-    }
-    // Delete item
-    else if (req.url.startsWith('/items/') && req.method === 'DELETE') {
+    } else if (req.url.startsWith('/items/') && req.method === 'PUT') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            try {
+                const id = req.url.split('/')[2];
+                const { text } = JSON.parse(body);
+                await updateListItem(id, text);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
+            } catch (error) {
+                console.error(error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Failed to update item' }));
+            }
+        });
+    } else if (req.url.startsWith('/items/') && req.method === 'DELETE') {
         try {
             const id = req.url.split('/')[2];
-            await deleteItem(id);
+            await removeListItem(id);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         } catch (error) {
             console.error(error);
             res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: error.message }));
+            res.end(JSON.stringify({ success: false, error: 'Failed to remove item' }));
         }
-    }
-    // Not found
-    else {
+    } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
+        res.end('Route not found');
     }
 }
 
-// Start server
 const server = http.createServer(handleRequest);
-server.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}/`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
