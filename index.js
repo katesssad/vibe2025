@@ -2,11 +2,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
+const url = require('url');
+const querystring = require('querystring');
 const crypto = require('crypto');
 
 const PORT = 3000;
+const SESSION_SECRET = 'your-secret-key-here';
 
-// Database connection settings
 const dbConfig = {
     host: 'localhost',
     user: 'root',
@@ -14,271 +16,383 @@ const dbConfig = {
     database: 'todolist',
 };
 
-// Простая "база данных" пользователей в памяти (в реальном приложении храните в БД)
-const users = {
-    // username: { passwordHash: 'hash', salt: 'salt' }
-};
+const sessions = {};
 
-// Генерация хэша пароля
-function hashPassword(password, salt) {
-    return crypto.createHash('sha256').update(password + salt).digest('hex');
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
 }
 
-// Middleware для проверки аутентификации
-function checkAuth(req) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) return null;
+function generateSessionId() {
+    return crypto.randomBytes(16).toString('hex');
+}
+
+function parseCookies(req) {
+    const cookies = {};
+    if (req.headers.cookie) {
+        req.headers.cookie.split(';').forEach(cookie => {
+            const parts = cookie.split('=');
+            cookies[parts[0].trim()] = (parts[1] || '').trim();
+        });
+    }
+    return cookies;
+}
+
+async function checkAuth(req) {
+    const cookies = parseCookies(req);
+    const sessionId = cookies.sessionId;
     
-    const [username, token] = Buffer.from(authHeader.split(' ')[1], 'base64').toString().split(':');
-    return users[username] && users[username].token === token ? username : null;
+    if (!sessionId || !sessions[sessionId]) {
+        return { isAuthenticated: false };
+    }
+    
+    return { 
+        isAuthenticated: true,
+        userId: sessions[sessionId].userId,
+        username: sessions[sessionId].username
+    };
 }
 
-// Функции для работы с задачами (теперь учитывают пользователя)
-async function retrieveListItems(username) {
+async function getUserByCredentials(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const hashedPassword = hashPassword(password);
+    const [rows] = await connection.execute(
+        'SELECT id, username FROM users WHERE username = ? AND password = ?',
+        [username, hashedPassword]
+    );
+    await connection.end();
+    return rows[0];
+}
+
+async function createUser(username, password) {
+    const connection = await mysql.createConnection(dbConfig);
+    const hashedPassword = hashPassword(password);
+    const [result] = await connection.execute(
+        'INSERT INTO users (username, password) VALUES (?, ?)',
+        [username, hashedPassword]
+    );
+    await connection.end();
+    return result.insertId;
+}
+
+async function retrieveListItems(userId) {
+    const connection = await mysql.createConnection(dbConfig);
+    const [rows] = await connection.execute(
+        'SELECT id, text FROM items WHERE user_id = ? ORDER BY id',
+        [userId]
+    );
+    await connection.end();
+    return rows;
+}
+
+async function addListItem(text, userId) {
+    const connection = await mysql.createConnection(dbConfig);
+    const [result] = await connection.execute(
+        'INSERT INTO items (text, user_id) VALUES (?, ?)',
+        [text, userId]
+    );
+    await connection.end();
+    return result.insertId;
+}
+
+async function deleteListItem(id, userId) {
+    const connection = await mysql.createConnection(dbConfig);
+    const [result] = await connection.execute(
+        'DELETE FROM items WHERE id = ? AND user_id = ?',
+        [id, userId]
+    );
+    await connection.end();
+    return result.affectedRows > 0;
+}
+
+async function updateListItem(id, text, userId) {
+    const connection = await mysql.createConnection(dbConfig);
+    const [result] = await connection.execute(
+        'UPDATE items SET text = ? WHERE id = ? AND user_id = ?',
+        [text, id, userId]
+    );
+    await connection.end();
+    return result.affectedRows > 0;
+}
+
+async function serveLoginPage(res, isRegister = false) {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        const query = 'SELECT id, text FROM items WHERE username = ?';
-        const [rows] = await connection.execute(query, [username]);
-        await connection.end();
-        return rows;
-    } catch (error) {
-        console.error('Error retrieving list items:', error);
-        throw error;
+        let html = await fs.promises.readFile(path.join(__dirname, 'index.html'), 'utf8');
+        
+        const authForm = `
+            <div style="text-align: center; margin: 50px auto; width: 300px; background: #f9f9f9; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+                <h2>${isRegister ? 'Register' : 'Login'}</h2>
+                <form onsubmit="handleAuth(event, ${isRegister})" style="margin-top: 20px;">
+                    <input type="text" placeholder="Username" id="auth-username" style="width: 100%; padding: 8px; margin-bottom: 10px;"><br>
+                    <input type="password" placeholder="Password" id="auth-password" style="width: 100%; padding: 8px; margin-bottom: 10px;"><br>
+                    ${isRegister ? '<input type="password" placeholder="Confirm Password" id="auth-confirm" style="width: 100%; padding: 8px; margin-bottom: 10px;"><br>' : ''}
+                    <button type="submit" style="padding: 8px 15px; background: #4CAF50; color: white; border: none; border-radius: 3px; cursor: pointer;">
+                        ${isRegister ? 'Register' : 'Login'}
+                    </button>
+                </form>
+                <p style="margin-top: 15px;">
+                    ${isRegister ? 'Already have an account? <a href="/login" style="color: #4CAF50;">Login</a>' : 
+                                  'Need an account? <a href="/register" style="color: #4CAF50;">Register</a>'}
+                </p>
+            </div>
+            <script>
+                async function handleAuth(event, isRegister) {
+                    event.preventDefault();
+                    const username = document.getElementById('auth-username').value;
+                    const password = document.getElementById('auth-password').value;
+                    
+                    if (isRegister) {
+                        const confirm = document.getElementById('auth-confirm').value;
+                        if (password !== confirm) {
+                            alert('Passwords do not match');
+                            return;
+                        }
+                    }
+                    
+                    try {
+                        const response = await fetch(isRegister ? '/register' : '/login', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: 'username=' + encodeURIComponent(username) + '&password=' + encodeURIComponent(password)
+                        });
+                        
+                        const result = await response.json();
+                        if (result.success) {
+                            window.location.href = '/';
+                        } else {
+                            alert(result.message || 'Authentication failed');
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        alert('Authentication failed');
+                    }
+                }
+            </script>
+        `;
+        
+        // Полностью заменяем содержимое body на форму авторизации
+        html = html.replace(/<body>[\s\S]*<\/body>/, `<body>${authForm}</body>`);
+        
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(html);
+    } catch (err) {
+        console.error(err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading page');
     }
 }
 
-async function addListItem(text, username) {
+async function serveTodoList(res, userId, username) {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        const query = 'INSERT INTO items (text, username) VALUES (?, ?)';
-        const [result] = await connection.execute(query, [text, username]);
-        await connection.end();
-        return result.insertId;
-    } catch (error) {
-        console.error('Error adding list item:', error);
-        throw error;
+        let html = await fs.promises.readFile(path.join(__dirname, 'index.html'), 'utf8');
+        
+        const rows = (await retrieveListItems(userId)).map(item => `
+            <tr>
+                <td>${item.id}</td>
+                <td class="item-text" data-id="${item.id}">${item.text}</td>
+                <td>
+                    <button class="action-btn delete-btn" onclick="removeItem(${item.id})">×</button>
+                    <button class="action-btn edit-btn" onclick="enableEdit(${item.id})">✎</button>
+                </td>
+            </tr>
+        `).join('');
+        
+        const userHeader = `<div style="text-align: right; margin: 10px 15% 0 0;">
+            Logged in as <strong>${username}</strong> | 
+            <a href="/logout" style="color: #ff4444;">Logout</a>
+        </div>`;
+        
+        html = html.replace('<body>', `<body>${userHeader}`);
+        html = html.replace('{{rows}}', rows);
+        
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(html);
+    } catch (err) {
+        console.error(err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Error loading page');
     }
-}
-
-async function updateListItem(id, text, username) {
-    try {
-        const connection = await mysql.createConnection(dbConfig);
-        const query = 'UPDATE items SET text = ? WHERE id = ? AND username = ?';
-        await connection.execute(query, [text, id, username]);
-        await connection.end();
-    } catch (error) {
-        console.error('Error updating list item:', error);
-        throw error;
-    }
-}
-
-async function removeListItem(id, username) {
-    try {
-        const connection = await mysql.createConnection(dbConfig);
-        const query = 'DELETE FROM items WHERE id = ? AND username = ?';
-        await connection.execute(query, [id, username]);
-        await connection.end();
-    } catch (error) {
-        console.error('Error removing list item:', error);
-        throw error;
-    }
-}
-
-async function getHtmlRows(username) {
-    const todoItems = await retrieveListItems(username);
-    return todoItems.map(item => `
-        <tr data-id="${item.id}">
-            <td>${item.id}</td>
-            <td class="item-text">${item.text}</td>
-            <td>
-                <button onclick="enableEdit(${item.id}, '${item.text.replace(/'/g, "\\'")}')">Edit</button>
-                <button onclick="deleteItem(${item.id})">×</button>
-            </td>
-        </tr>
-    `).join('');
 }
 
 async function handleRequest(req, res) {
-    // Главная страница
-    if (req.url === '/' && req.method === 'GET') {
+    const parsedUrl = url.parse(req.url, true);
+    const pathname = parsedUrl.pathname;
+    const auth = await checkAuth(req);
+
+    // Обработка статических файлов (CSS, JS)
+    if (pathname.endsWith('.css') || pathname.endsWith('.js')) {
         try {
-            const username = checkAuth(req);
-            let html = await fs.promises.readFile(path.join(__dirname, 'index.html'), 'utf8');
-            
-            if (username) {
-                // Авторизованный пользователь
-                const processedHtml = html
-                    .replace('{{rows}}', await getHtmlRows(username))
-                    .replace('{{authSection}}', `
-                        <div class="auth-info">
-                            Logged in as: ${username} 
-                            <button onclick="logout()">Logout</button>
-                        </div>
-                    `);
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(processedHtml);
-            } else {
-                // Неавторизованный пользователь
-                const loginForm = `
-                    <div class="auth-form">
-                        <h3>Login</h3>
-                        <input type="text" id="loginUsername" placeholder="Username">
-                        <input type="password" id="loginPassword" placeholder="Password">
-                        <button onclick="login()">Login</button>
-                        <p>Or <a href="#" onclick="showRegister()">register</a></p>
-                    </div>
-                    <div class="auth-form" id="registerForm" style="display:none;">
-                        <h3>Register</h3>
-                        <input type="text" id="regUsername" placeholder="Username">
-                        <input type="password" id="regPassword" placeholder="Password">
-                        <button onclick="register()">Register</button>
-                        <p>Or <a href="#" onclick="showLogin()">login</a></p>
-                    </div>
-                `;
-                const processedHtml = html
-                    .replace('{{rows}}', '')
-                    .replace('{{authSection}}', loginForm);
-                res.writeHead(200, { 'Content-Type': 'text/html' });
-                res.end(processedHtml);
-            }
+            const content = await fs.promises.readFile(path.join(__dirname, pathname));
+            res.writeHead(200, { 'Content-Type': pathname.endsWith('.css') ? 'text/css' : 'application/javascript' });
+            res.end(content);
         } catch (err) {
-            console.error(err);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Error loading page');
+            res.writeHead(404);
+            res.end('Not found');
         }
+        return;
     }
-    // Логин
-    else if (req.url === '/login' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', () => {
-            try {
-                const { username, password } = JSON.parse(body);
-                const user = users[username];
+
+    // Маршруты авторизации
+    if (pathname === '/login' || pathname === '/register') {
+        if (req.method === 'GET') {
+            await serveLoginPage(res, pathname === '/register');
+        } else if (req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => body += chunk.toString());
+            req.on('end', async () => {
+                const { username, password } = querystring.parse(body);
                 
-                if (user && user.passwordHash === hashPassword(password, user.salt)) {
-                    const token = crypto.randomBytes(16).toString('hex');
-                    users[username].token = token;
-                    
-                    res.writeHead(200, { 
-                        'Content-Type': 'application/json',
-                        'Set-Cookie': `auth=${username}:${token}; Path=/; HttpOnly`
-                    });
-                    res.end(JSON.stringify({ success: true }));
-                } else {
-                    res.writeHead(401, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Invalid credentials' }));
-                }
-            } catch (error) {
-                console.error(error);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Login failed' }));
-            }
-        });
-    }
-    // Регистрация
-    else if (req.url === '/register' && req.method === 'POST') {
-        let body = '';
-        req.on('data', chunk => body += chunk.toString());
-        req.on('end', () => {
-            try {
-                const { username, password } = JSON.parse(body);
-                
-                if (users[username]) {
+                if (!username || !password) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Username already exists' }));
+                    res.end(JSON.stringify({ success: false, message: 'Username and password required' }));
                     return;
                 }
                 
-                const salt = crypto.randomBytes(16).toString('hex');
-                const passwordHash = hashPassword(password, salt);
-                const token = crypto.randomBytes(16).toString('hex');
-                
-                users[username] = { passwordHash, salt, token };
-                
-                res.writeHead(200, { 
-                    'Content-Type': 'application/json',
-                    'Set-Cookie': `auth=${username}:${token}; Path=/; HttpOnly`
-                });
-                res.end(JSON.stringify({ success: true }));
-            } catch (error) {
-                console.error(error);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Registration failed' }));
-            }
-        });
-    }
-    // Выход
-    else if (req.url === '/logout' && req.method === 'POST') {
-        const username = checkAuth(req);
-        if (username && users[username]) {
-            delete users[username].token;
+                try {
+                    let user;
+                    if (pathname === '/register') {
+                        const userId = await createUser(username, password);
+                        user = { id: userId, username };
+                    } else {
+                        user = await getUserByCredentials(username, password);
+                        if (!user) {
+                            res.writeHead(401, { 'Content-Type': 'application/json' });
+                            res.end(JSON.stringify({ success: false, message: 'Invalid credentials' }));
+                            return;
+                        }
+                    }
+                    
+                    const sessionId = generateSessionId();
+                    sessions[sessionId] = { userId: user.id, username: user.username };
+                    
+                    res.writeHead(200, { 
+                        'Content-Type': 'application/json',
+                        'Set-Cookie': `sessionId=${sessionId}; HttpOnly; Path=/; Max-Age=86400`
+                    });
+                    res.end(JSON.stringify({ success: true }));
+                } catch (error) {
+                    console.error('Auth error:', error);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'Authentication failed' }));
+                }
+            });
         }
-        res.writeHead(200, { 
-            'Content-Type': 'application/json',
-            'Set-Cookie': 'auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'
-        });
-        res.end(JSON.stringify({ success: true }));
+        return;
     }
-    // API для задач (требует аутентификации)
-    else {
-        const username = checkAuth(req);
-        if (!username) {
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: false, error: 'Unauthorized' }));
-            return;
-        }
 
-        if (req.url === '/items' && req.method === 'POST') {
-            let body = '';
-            req.on('data', chunk => body += chunk.toString());
-            req.on('end', async () => {
-                try {
-                    const { text } = JSON.parse(body);
-                    await addListItem(text, username);
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
-                } catch (error) {
-                    console.error(error);
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Failed to add item' }));
-                }
-            });
-        } 
-        else if (req.url.startsWith('/items/') && req.method === 'PUT') {
-            let body = '';
-            req.on('data', chunk => body += chunk.toString());
-            req.on('end', async () => {
-                try {
-                    const id = req.url.split('/')[2];
-                    const { text } = JSON.parse(body);
-                    await updateListItem(id, text, username);
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
-                } catch (error) {
-                    console.error(error);
-                    res.writeHead(500, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: false, error: 'Failed to update item' }));
-                }
-            });
-        } 
-        else if (req.url.startsWith('/items/') && req.method === 'DELETE') {
+    // Выход из системы
+    if (pathname === '/logout') {
+        const cookies = parseCookies(req);
+        if (cookies.sessionId) {
+            delete sessions[cookies.sessionId];
+        }
+        res.writeHead(302, { 
+            'Location': '/login',
+            'Set-Cookie': 'sessionId=; expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/'
+        });
+        res.end();
+        return;
+    }
+
+    // Проверка авторизации для основных маршрутов
+    if (!auth.isAuthenticated) {
+        res.writeHead(302, { 'Location': '/login' });
+        res.end();
+        return;
+    }
+
+    // Главная страница с to-do листом
+    if (pathname === '/') {
+        await serveTodoList(res, auth.userId, auth.username);
+        return;
+    }
+
+    // API для работы с задачами
+    if (pathname === '/add' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const { text } = querystring.parse(body);
+            if (!text) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Text is required' }));
+                return;
+            }
+            
             try {
-                const id = req.url.split('/')[2];
-                await removeListItem(id, username);
+                await addListItem(text, auth.userId);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true }));
             } catch (error) {
-                console.error(error);
+                console.error('Error adding item:', error);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Failed to remove item' }));
+                res.end(JSON.stringify({ success: false, message: 'Error adding item' }));
             }
-        } 
-        else {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Route not found');
-        }
+        });
+        return;
     }
+
+    if (pathname === '/delete' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const { id } = querystring.parse(body);
+            if (!id) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'ID is required' }));
+                return;
+            }
+            
+            try {
+                const deleted = await deleteListItem(id, auth.userId);
+                if (deleted) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true }));
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'Item not found' }));
+                }
+            } catch (error) {
+                console.error('Error deleting item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Error deleting item' }));
+            }
+        });
+        return;
+    }
+
+    if (pathname === '/update' && req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => body += chunk.toString());
+        req.on('end', async () => {
+            const { id, text } = querystring.parse(body);
+            if (!id || !text) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'ID and text are required' }));
+                return;
+            }
+            
+            try {
+                const updated = await updateListItem(id, text, auth.userId);
+                if (updated) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true }));
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, message: 'Item not found' }));
+                }
+            } catch (error) {
+                console.error('Error updating item:', error);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, message: 'Error updating item' }));
+            }
+        });
+        return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
 }
 
 const server = http.createServer(handleRequest);

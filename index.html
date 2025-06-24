@@ -7,83 +7,109 @@
     <style>
         body {
             font-family: Arial, sans-serif;
+            background-color: #f9f9f9;
         }
         #todoList {
             border-collapse: collapse;
-            width: 70%;
-            margin: 0 auto;
+            width: 80%;
+            margin: 20px auto;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         #todoList th, #todoList td {
-            border: 1px solid #ddd;
-            padding: 8px;
+            border: 1px solid #e0e0e0;
+            padding: 10px 12px;
             text-align: left;
         }
         #todoList th {
-            background-color: #f0f0f0;
+            background-color: #4a6fa5;
+            color: white;
+            font-weight: normal;
         }
         #todoList th:first-child, #todoList th:last-child {
-            width: 5%;
+            width: 8%;
         }
         #todoList th:nth-child(2) {
-            width: 90%;
+            width: 84%;
+        }
+        #todoList tr:nth-child(even) {
+            background-color: #f5f5f5;
+        }
+        #todoList tr:hover {
+            background-color: #ebebeb;
+        }
+        .action-btn {
+            cursor: pointer;
+            background: #f0f0f0;
+            color: #555;
+            border: 1px solid #d0d0d0;
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            font-weight: bold;
+            text-align: center;
+            line-height: 24px;
+            display: inline-block;
+            margin: 0 3px;
+            transition: all 0.2s;
+        }
+        .action-btn:hover {
+            background: #e0e0e0;
+            transform: scale(1.05);
+        }
+        .delete-btn {
+            color: #ff5555;
+            border-color: #ffaaaa;
+        }
+        .edit-btn {
+            color: #5555ff;
+            border-color: #aaaaff;
         }
         .add-form {
-            margin-top: 20px;
-            width: 70%;
-            margin: 20px auto;
+            margin-top: 25px;
+            width: 80%;
+            margin: 25px auto;
+            display: flex;
+            gap: 10px;
         }
         .add-form input[type="text"] {
-            padding: 8px;
-            width: 70%;
+            padding: 10px;
+            width: 75%;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
         }
         .add-form button {
-            padding: 8px;
-            width: 20%;
+            padding: 10px;
+            width: 25%;
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+        .add-form button:hover {
+            background-color: #3a5a8f;
         }
         .edit-input {
             width: 100%;
-            padding: 5px;
-            box-sizing: border-box;
-        }
-        .auth-info {
-            text-align: right;
-            margin: 10px 15% 20px 0;
-        }
-        .auth-form {
-            width: 300px;
-            margin: 50px auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            background: #f9f9f9;
-        }
-        .auth-form input {
-            display: block;
-            width: 100%;
             padding: 8px;
-            margin: 10px 0;
             box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
         }
-        .auth-form button {
-            width: 100%;
-            padding: 8px;
-            margin: 10px 0;
-        }
-        a {
-            color: #0066cc;
-            text-decoration: none;
-            cursor: pointer;
-        }
-        a:hover {
-            text-decoration: underline;
+        h2 {
+            color: #333;
+            margin-top: 30px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
         }
     </style>
 </head>
 <body>
 
 <h2 style="text-align: center;">To-Do List</h2>
-
-{{authSection}}
 
 <table id="todoList">
     <thead>
@@ -100,187 +126,109 @@
 
 <div class="add-form">
     <input type="text" id="newItem" placeholder="Enter new item">
-    <button onclick="addItem()">Add</button>
+    <button onclick="addItem()">Add Item</button>
 </div>
 
 <script>
-    function showRegister() {
-        document.querySelector('.auth-form').style.display = 'none';
-        document.getElementById('registerForm').style.display = 'block';
-    }
-
-    function showLogin() {
-        document.getElementById('registerForm').style.display = 'none';
-        document.querySelector('.auth-form').style.display = 'block';
-    }
-
-    async function login() {
-        const username = document.getElementById('loginUsername').value.trim();
-        const password = document.getElementById('loginPassword').value.trim();
-
-        if (!username || !password) {
-            alert('Please enter both username and password');
-            return;
-        }
-
-        try {
-            const response = await fetch('/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username, password })
-            });
-
-            const data = await response.json();
-            
-            if (data.success) {
-                window.location.href = '/';
-            } else {
-                alert(data.error || 'Login failed');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error during login');
-        }
-    }
-
-    async function register() {
-        const username = document.getElementById('regUsername').value.trim();
-        const password = document.getElementById('regPassword').value.trim();
-
-        if (!username || !password) {
-            alert('Please enter both username and password');
-            return;
-        }
-
-        try {
-            const response = await fetch('/register', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username, password })
-            });
-
-            const data = await response.json();
-            
-            if (data.success) {
-                window.location.href = '/';
-            } else {
-                alert(data.error || 'Registration failed');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error during registration');
-        }
-    }
-
-    async function logout() {
-        try {
-            const response = await fetch('/logout', {
-                method: 'POST'
-            });
-
-            if (response.ok) {
-                window.location.href = '/';
-            } else {
-                alert('Failed to logout');
-            }
-        } catch (error) {
-            console.error('Error:', error);
-            alert('Error during logout');
-        }
-    }
-
     async function addItem() {
         const newItemInput = document.getElementById('newItem');
         const newItemText = newItemInput.value.trim();
 
-        if (newItemText) {
-            try {
-                const response = await fetch('/items', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ text: newItemText })
-                });
+        if (!newItemText) return;
 
-                if (response.ok) {
-                    window.location.reload();
-                } else {
-                    const data = await response.json();
-                    alert(data.error || 'Failed to add item');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Error adding item');
+        try {
+            const response = await fetch('/add', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `text=${encodeURIComponent(newItemText)}`
+            });
+
+            const result = await response.json();
+            if (result.success) {
+                newItemInput.value = '';
+                window.location.reload();
+            } else {
+                alert('Failed to add item: ' + (result.message || 'Unknown error'));
             }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Failed to add item');
         }
     }
 
-    async function deleteItem(id) {
+    async function removeItem(id) {
         if (confirm('Are you sure you want to delete this item?')) {
             try {
-                const response = await fetch(`/items/${id}`, {
-                    method: 'DELETE'
+                const response = await fetch('/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `id=${id}`
                 });
 
-                if (response.ok) {
+                const result = await response.json();
+                if (result.success) {
                     window.location.reload();
                 } else {
-                    const data = await response.json();
-                    alert(data.error || 'Failed to delete item');
+                    alert('Failed to delete item: ' + (result.message || 'Unknown error'));
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('Error deleting item');
+                alert('Failed to delete item');
             }
         }
     }
 
-    function enableEdit(id, currentText) {
-        const row = document.querySelector(`tr[data-id="${id}"]`);
-        const textCell = row.querySelector('.item-text');
+    function enableEdit(id) {
+        const textCell = document.querySelector(`td.item-text[data-id="${id}"]`);
+        const currentText = textCell.textContent;
         
         textCell.innerHTML = `
-            <input type="text" class="edit-input" value="${currentText}">
-            <button onclick="saveEdit(${id})">Save</button>
-            <button onclick="cancelEdit(${id}, '${currentText.replace(/'/g, "\\'")}')">Cancel</button>
+            <input type="text" class="edit-input" value="${currentText.replace(/"/g, '&quot;')}" 
+                   onkeydown="handleEditKey(event, ${id})">
         `;
+        textCell.querySelector('input').focus();
+    }
+
+    function handleEditKey(event, id) {
+        if (event.key === 'Enter') {
+            saveEdit(id);
+        } else if (event.key === 'Escape') {
+            window.location.reload();
+        }
     }
 
     async function saveEdit(id) {
-        const newText = document.querySelector(`tr[data-id="${id}"] .edit-input`).value.trim();
-        
-        if (newText) {
-            try {
-                const response = await fetch(`/items/${id}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ text: newText })
-                });
+        const input = document.querySelector(`td.item-text[data-id="${id}"] input`);
+        const newText = input.value.trim();
 
-                if (response.ok) {
-                    window.location.reload();
-                } else {
-                    const data = await response.json();
-                    alert(data.error || 'Failed to update item');
-                }
-            } catch (error) {
-                console.error('Error:', error);
-                alert('Error updating item');
-            }
+        if (!newText) {
+            alert('Text cannot be empty');
+            return;
         }
-    }
 
-    function cancelEdit(id, originalText) {
-        const row = document.querySelector(`tr[data-id="${id}"]`);
-        const textCell = row.querySelector('.item-text');
-        textCell.innerHTML = originalText;
+        try {
+            const response = await fetch('/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `id=${id}&text=${encodeURIComponent(newText)}`
+            });
+
+            const result = await response.json();
+            if (result.success) {
+                window.location.reload();
+            } else {
+                alert('Failed to update item: ' + (result.message || 'Unknown error'));
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Failed to update item');
+        }
     }
 </script>
 
